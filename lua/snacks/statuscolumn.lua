@@ -262,15 +262,20 @@ function M._get()
   end
 
   if (nu or rnu) and vim.v.virtnum == 0 then
-    local num ---@type number
     if rnu and nu and vim.v.relnum == 0 then
-      num = vim.v.lnum
+      local width_last_line = #tostring(vim.fn.line("$"))
+      local numberwidth = vim.wo[win].numberwidth
+      local width = math.max(width_last_line, numberwidth)
+      local current_line = vim.v.lnum
+      local width_current_line = #tostring(current_line)
+      local padding = string.rep(" ", width - width_current_line)
+
+      components[2] = vim.v.lnum .. " " .. padding
     elseif rnu then
-      num = vim.v.relnum
+      components[2] = "%=" .. vim.v.relnum .. " "
     else
-      num = vim.v.lnum
+      components[2] = "%=" .. vim.v.lnum .. " "
     end
-    components[2] = "%=" .. num .. " "
   end
 
   if show_signs or show_folds then
