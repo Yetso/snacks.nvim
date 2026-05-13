@@ -188,7 +188,7 @@ function Tree:walk(node, fn, opts)
     if a.dir ~= b.dir then
       return a.dir
     end
-    return a.name < b.name
+    return string.lower(a.name) < string.lower(b.name)
   end)
   for c, child in ipairs(children) do
     child.last = c == #children
