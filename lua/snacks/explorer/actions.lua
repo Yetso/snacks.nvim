@@ -321,6 +321,7 @@ function M.actions.confirm(picker, item, action)
     M.update(picker, { target = item.file })
   elseif item.dir then
     Tree:toggle(item.file)
+    picker.list:move(1)
     M.update(picker, { refresh = true })
   else
     Snacks.picker.actions.jump(picker, item, action)
