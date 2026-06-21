@@ -319,3 +319,11 @@ Snacks.notifier.notify(msg, level, opts)
 ---@param opts? snacks.notifier.history
 Snacks.notifier.show_history(opts)
 ```
+
+### `Snacks.notifier.clear_history()`
+
+Clear the notification history
+
+```lua
+Snacks.notifier.clear_history()
+```
