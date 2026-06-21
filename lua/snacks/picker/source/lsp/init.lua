@@ -34,7 +34,7 @@ end
 --- Wraps older style clients to be compatible with the new style.
 ---@param client vim.lsp.Client
 ---@return vim.lsp.Client
-local function wrap(client)
+function M.wrap(client)
   local meta = getmetatable(client)
   if meta and meta.request then
     return client
@@ -43,7 +43,7 @@ local function wrap(client)
   if client.wrapped then
     return client
   end
-  local methods = { "request", "supports_method", "cancel_request", "notify" }
+  local methods = { "request", "request_sync", "supports_method", "cancel_request", "notify" }
   -- old style
   return setmetatable({ wrapped = true }, {
     __index = function(_, k)
@@ -86,7 +86,7 @@ end
 function M.get_clients(buf, method)
   ---@param client vim.lsp.Client
   local clients = vim.tbl_map(function(client)
-    return wrap(client)
+    return M.wrap(client)
     ---@diagnostic disable-next-line: deprecated
   end, (vim.lsp.get_clients or vim.lsp.get_active_clients)({ bufnr = buf }))
   ---@param client vim.lsp.Client
@@ -195,7 +195,7 @@ function R:request(buf, method, params, cb)
     self:track_cancel() -- setup autocmd here, since this must be called in the main loop
 
     ---@diagnostic disable-next-line: param-type-mismatch
-    local clients = type(buf) == "number" and M.get_clients(buf, method) or { wrap(buf) }
+    local clients = type(buf) == "number" and M.get_clients(buf, method) or { M.wrap(buf) }
 
     self.pending = self.pending + #clients
     for _, client in ipairs(clients) do
