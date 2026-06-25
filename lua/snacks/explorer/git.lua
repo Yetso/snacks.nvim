@@ -9,12 +9,12 @@ local uv = vim.uv or vim.loop
 
 local CACHE_TTL = 15 * 60 -- 15 minutes
 
-M.state = {} ---@type table<string, {tick: number, last: number}>
+M.state = {} ---@type table<string, {tick: number, last: number, results: snacks.explorer.git.Status[]}>
 
 ---@param path string
 function M.refresh(path)
   for root in pairs(M.state) do
-    if path == root or path:find(root .. "/", 1, true) == 1 then
+    if path == root or path:find(root .. "/", 1, true) == 1 or root:find(path .. "/", 1, true) == 1 then
       M.state[root].last = 0
     end
   end
@@ -22,11 +22,16 @@ end
 
 ---@param cwd string
 function M.is_dirty(cwd)
-  local root = Snacks.git.get_root(cwd)
-  if not root then
-    return false
+  local base_root = Snacks.git.get_root(cwd)
+  if base_root and (not M.state[base_root] or M.state[base_root].last == 0) then
+    return true
   end
-  return M.state[root] == nil or M.state[root].last == 0
+  for root, state in pairs(M.state) do
+    if root:find(cwd .. "/", 1, true) == 1 then
+      if state.last == 0 then return true end
+    end
+  end
+  return false
 end
 
 ---@param cwd string
@@ -37,75 +42,117 @@ function M.update(cwd, opts)
   if opts.force then
     ttl = 0
   end
-  local root = Snacks.git.get_root(cwd)
 
-  if not root then
+  local roots_set = {}
+  local base_root = Snacks.git.get_root(cwd)
+  if base_root then
+    roots_set[base_root] = true
+  end
+  -- Dynamically discover sub-repos currently loaded in the explorer tree
+  local ok, Tree = pcall(require, "snacks.explorer.tree")
+  if ok then
+    local node = Tree:find(cwd)
+    if node then
+      Tree:walk(node, function(n)
+        if n.dir and vim.fn.isdirectory(n.path .. "/.git") == 1 then
+          roots_set[n.path] = true
+        end
+      end, { all = true })
+    end
+  end
+
+  local roots = vim.tbl_keys(roots_set)
+  if #roots == 0 then
     return M._update(cwd, {})
   end
   local now = os.time()
-  M.state[root] = M.state[root] or { tick = 0, last = 0 }
-  local state = M.state[root]
-  if now - state.last < ttl then
+  local active_roots = {}
+  for _, root in ipairs(roots) do
+    M.state[root] = M.state[root] or { tick = 0, last = 0, results = {} }
+    local state = M.state[root]
+    if now - state.last >= ttl then
+      state.last = now
+      state.tick = state.tick + 1
+      table.insert(active_roots, root)
+    end
+  end
+  if #active_roots == 0 then
     return
   end
-  state.last = now
-  state.tick = state.tick + 1
-  local tick = state.tick
 
-  local output = ""
-  local stdout = assert(uv.new_pipe())
-  local handle ---@type uv.uv_process_t
-  handle = uv.spawn("git", {
-    stdio = { nil, stdout, nil },
-    cwd = root,
-    hide = true,
-    args = {
-      "--no-pager",
-      "--no-optional-locks",
-      "status",
-      "--porcelain=v1",
-      "--ignored=matching",
-      "-z",
-      opts.untracked and "-unormal" or "-uno",
-    },
-  }, function()
-    handle:close()
-  end)
+  local pending = #active_roots
 
-  if not handle then
-    return M._update(cwd, {})
-  end
-
-  local function process()
-    if not M.state[root] or M.state[root].tick ~= tick then
-      return
-    end
-    local ret = {} ---@type snacks.explorer.git.Status[]
-    for _, line in ipairs(vim.split(output, "\0")) do
-      if line ~= "" then
-        local status, file = line:match("^(..) (.+)$")
-        if status then
-          ret[#ret + 1] = {
-            status = status,
-            file = root .. "/" .. file,
-          }
+  -- Callback to trigger once ALL active root processes have finished
+  local function on_done()
+    pending = pending - 1
+    if pending == 0 then
+      local all_results = {}
+      for _, root in ipairs(roots) do
+        if M.state[root] and M.state[root].results then
+          for _, res in ipairs(M.state[root].results) do
+            table.insert(all_results, res)
+          end
         end
       end
-    end
-    if M._update(cwd, ret) and opts and opts.on_update then
-      vim.schedule(opts.on_update)
+      if M._update(cwd, all_results) and opts.on_update then
+        vim.schedule(opts.on_update)
+      end
     end
   end
 
-  stdout:read_start(function(err, data)
-    assert(not err, err)
-    if data then
-      output = output .. data
+  -- Concurrently fetch git status for all dirty/expired roots
+  for _, root in ipairs(active_roots) do
+    local tick = M.state[root].tick
+    local output = ""
+    local stdout = assert(uv.new_pipe())
+    local handle ---@type uv.uv_process_t
+    handle = uv.spawn("git", {
+      stdio = { nil, stdout, nil },
+      cwd = root,
+      hide = true,
+      args = {
+        "--no-pager",
+        "--no-optional-locks",
+        "status",
+        "--porcelain=v1",
+        "--ignored=matching",
+        "-z",
+        opts.untracked and "-unormal" or "-uno",
+      },
+    }, function()
+      handle:close()
+    end)
+
+    if not handle then
+      on_done()
     else
-      process()
-      stdout:close()
+      stdout:read_start(function(err, data)
+        assert(not err, err)
+        if data then
+          output = output .. data
+        else
+          stdout:close()
+          -- Make sure the result belongs to the current fetch cycle
+          if M.state[root].tick == tick then
+            local ret = {} ---@type snacks.explorer.git.Status[]
+            for _, line in ipairs(vim.split(output, "\0")) do
+              if line ~= "" then
+                local status, file = line:match("^(..) (.+)$")
+                if status then
+                  ret[#ret + 1] = {
+                    status = status,
+                    file = root .. "/" .. file,
+                  }
+                end
+              end
+            end
+            M.state[root].results = ret -- Cache the results for this specific root
+          end
+          on_done()
+        end
+      end)
     end
-  end)
+  end
 end
 
 ---@param cwd string
@@ -114,7 +161,7 @@ function M._update(cwd, results)
   local Tree = require("snacks.explorer.tree")
   local Git = require("snacks.picker.source.git")
   local node = Tree:find(cwd)
-
+  if not node then return false end
   local snapshot = Tree:snapshot(node, { "status", "ignored" })
 
   Tree:walk(node, function(n)
@@ -126,6 +173,7 @@ function M._update(cwd, results)
   ---@param status string
   local function add_git_status(path, status)
     local n = Tree:find(path)
+    if not n then return end
     n.status = n.status and Git.merge_status(n.status, status) or status
     if status:sub(1, 1) == "!" then
       n.ignored = true
@@ -145,7 +193,7 @@ function M._update(cwd, results)
     end
     if is_dir then
       local n = Tree:find(path)
-      n.dir_status = s.status
+      if n then n.dir_status = s.status end
     end
     if s.status:sub(1, 1) ~= "!" then -- don't propagate ignored status
       add_git_status(cwd, s.status)
