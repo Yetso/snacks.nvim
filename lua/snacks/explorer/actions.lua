@@ -198,13 +198,17 @@ function M.actions.explorer_git_prev(picker, item)
 end
 
 function M.actions.explorer_add(picker)
+  local path = svim.fs.normalize(picker:dir())
+  local cwd = svim.fs.normalize(picker:cwd())
+  local relative = vim.fs.relpath(cwd, path) or path
   Snacks.input({
     prompt = 'Add a new file or directory (directories end with a "/")',
+    default = relative .. "/",
   }, function(value)
-    if not value or value:find("^%s$") then
+    if not value or value:find("^%s*$") then
       return
     end
-    local path = svim.fs.normalize(picker:dir() .. "/" .. value)
+    path = vim.fs.joinpath(cwd, value)
     local is_file = value:sub(-1) ~= "/"
     local dir = is_file and vim.fs.dirname(path) or path
     if is_file and uv.fs_stat(path) then
