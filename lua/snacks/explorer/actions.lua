@@ -198,13 +198,24 @@ function M.actions.explorer_git_prev(picker, item)
 end
 
 function M.actions.explorer_add(picker)
+  local cwd = svim.fs.normalize(picker:cwd())
+  local base = svim.fs.normalize(picker:dir())
+  -- pre-fill the directory the new file will be created in, relative to the cwd
+  local default = ""
+  if base ~= cwd then
+    default = (base:find(cwd .. "/", 1, true) == 1 and base:sub(#cwd + 2) or base) .. "/"
+  end
   Snacks.input({
     prompt = 'Add a new file or directory (directories end with a "/")',
+    default = default,
   }, function(value)
-    if not value or value:find("^%s$") then
+    if not value or value:find("^%s*$") then
       return
     end
-    local path = svim.fs.normalize(picker:dir() .. "/" .. value)
+    local path = svim.fs.normalize(value) -- expands `~`
+    if not (path:sub(1, 1) == "/" or path:find("^%a:[/\\]")) then
+      path = svim.fs.normalize(cwd .. "/" .. path)
+    end
     local is_file = value:sub(-1) ~= "/"
     local dir = is_file and vim.fs.dirname(path) or path
     if is_file and uv.fs_stat(path) then
