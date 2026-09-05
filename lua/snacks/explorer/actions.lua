@@ -324,7 +324,7 @@ function M.actions.confirm(picker, item, action)
   elseif picker.input.filter.meta.searching then
     M.update(picker, { target = item.file })
   elseif item.dir then
-    Tree:toggle(item.file)
+    Tree:open(item.file)
     M.update(picker, { refresh = true })
   else
     Snacks.picker.actions.jump(picker, item, action)
