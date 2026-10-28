@@ -52,11 +52,11 @@ function M.update(cwd, opts)
   state.tick = state.tick + 1
   local tick = state.tick
 
-  local output = ""
-  local stdout = assert(uv.new_pipe())
-  local handle ---@type uv.uv_process_t
-  handle = uv.spawn("git", {
-    stdio = { nil, stdout, nil },
+  local root_output = ""
+  local root_stdout = assert(uv.new_pipe())
+  local root_handle ---@type uv.uv_process_t
+  root_handle = uv.spawn("git", {
+    stdio = { nil, root_stdout, nil },
     cwd = root,
     hide = true,
     args = {
@@ -69,10 +69,40 @@ function M.update(cwd, opts)
       opts.untracked and "-unormal" or "-uno",
     },
   }, function()
-    handle:close()
+    root_handle:close()
   end)
 
-  if not handle then
+  if not root_handle then
+    return M._update(cwd, {})
+  end
+
+  local submodule_output = ""
+  local submodule_stdout = assert(uv.new_pipe())
+  local submodule_handle ---@type uv.uv_process_t
+  submodule_handle = uv.spawn("git", {
+    stdio = { nil, submodule_stdout, nil },
+    cwd = root,
+    hide = true,
+    args = {
+      "--no-pager",
+      "--no-optional-locks",
+      "submodule",
+      "foreach",
+      "--recursive",
+      "git",
+      "--no-pager",
+      "--no-optional-locks",
+      "status",
+      "--porcelain=v1",
+      "--ignored=matching",
+      "-z",
+      opts.untracked and "-unormal" or "-uno",
+    },
+  }, function()
+    submodule_handle:close()
+  end)
+
+  if not submodule_handle then
     return M._update(cwd, {})
   end
 
@@ -81,29 +111,67 @@ function M.update(cwd, opts)
       return
     end
     local ret = {} ---@type snacks.explorer.git.Status[]
-    for _, line in ipairs(vim.split(output, "\0")) do
-      if line ~= "" then
-        local status, file = line:match("^(..) (.+)$")
-        if status then
-          ret[#ret + 1] = {
-            status = status,
-            file = root .. "/" .. file,
-          }
-        end
+
+    local function parse_file_status(repo_root, line)
+      local status, file = line:match("^(..) (.+)$")
+      if status then
+        ret[#ret + 1] = {
+          status = status,
+          file = repo_root .. "/" .. file,
+        }
       end
     end
+
+    for _, line in ipairs(vim.split(root_output, "\0")) do
+      if line ~= "" then
+        parse_file_status(root, line)
+      end
+    end
+
+    local submodule_root = ""
+    for _, file in ipairs(vim.split(submodule_output, "\0")) do
+      while true do
+        local line, new_submodule = file:match("^(Entering '(.-)'\n)")
+        if not line then
+          break
+        end
+
+        submodule_root = root .. "/" .. new_submodule
+        file = file:sub(#line + 1)
+      end
+
+      parse_file_status(submodule_root, file)
+    end
+
     if M._update(cwd, ret) and opts and opts.on_update then
       vim.schedule(opts.on_update)
     end
   end
 
-  stdout:read_start(function(err, data)
+  local pending = 2
+
+  local function on_done()
+    pending = pending - 1
+    if pending == 0 then
+      process()
+    end
+  end
+  root_stdout:read_start(function(err, data)
     assert(not err, err)
     if data then
-      output = output .. data
+      root_output = root_output .. data
     else
-      process()
-      stdout:close()
+      root_stdout:close()
+      on_done()
+    end
+  end)
+  submodule_stdout:read_start(function(err, data)
+    assert(not err, err)
+    if data then
+      submodule_output = submodule_output .. data
+    else
+      submodule_stdout:close()
+      on_done()
     end
   end)
 end

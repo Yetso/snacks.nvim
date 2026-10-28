@@ -376,12 +376,20 @@ function M.git_stage(picker)
   local done = 0
   for _, item in ipairs(items) do
     local opts = { cwd = item.cwd } ---@type snacks.picker.util.cmd.Opts
+
+    local path = Snacks.picker.util.path(item)
+    local git_root = Snacks.git.get_root(Snacks.picker.util.path(item))
+    if item.parent and git_root == path then
+      -- i.e. if interacting with a submodule folder itself
+      git_root = Snacks.git.get_root(Snacks.picker.util.path(item.parent))
+    end
+
     local cmd ---@type string[]
     if item.diff and item.staged ~= nil then
       opts.input = item.diff
-      cmd = { "git", "apply", "--cached", item.staged and "--reverse" or nil }
+      cmd = { "git", "-C", git_root, "apply", "--cached", item.staged and "--reverse" or nil }
     elseif item.status then
-      cmd = item.status:sub(2) == " " and { "git", "restore", "--staged", item.file } or { "git", "add", item.file }
+      cmd = item.status:sub(2) == " " and { "git", "-C", git_root, "restore", "--staged", item.file } or { "git", "-C", git_root, "add", item.file }
     else
       Snacks.notify.error("Can't stage/unstage this change", { title = "Snacks Picker" })
       return
@@ -421,15 +429,22 @@ function M.git_restore(picker)
       local cmd ---@type string[]
       local opts = { cwd = item.cwd }
 
+      local path = Snacks.picker.util.path(item)
+      local git_root = Snacks.git.get_root(Snacks.picker.util.path(item))
+      if item.parent and git_root == path then
+        -- i.e. if interacting with a submodule folder itself
+        git_root = Snacks.git.get_root(Snacks.picker.util.path(item.parent))
+      end
+
       if item.diff and item.staged ~= nil then
         opts.input = item.diff
         if item.staged then
-          cmd = { "git", "apply", "--reverse", "--cached" }
+          cmd = { "git", "-C", git_root, "apply", "--reverse", "--cached" }
         else
-          cmd = { "git", "apply", "--reverse" }
+          cmd = { "git", "-C", git_root, "apply", "--reverse" }
         end
       elseif item.status then
-        cmd = { "git", "restore", item.file }
+        cmd = { "git", "-C", git_root, "restore", item.file }
       else
         Snacks.notify.error("Can't restore this change", { title = "Snacks Picker" })
         return

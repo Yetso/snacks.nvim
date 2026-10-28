@@ -244,7 +244,7 @@ function M.explorer(opts, ctx)
         parent = parent,
         hidden = node.hidden,
         ignored = node.ignored,
-        status = (not node.dir or not node.open or opts.git_status_open) and status or nil,
+        status = (not node.dir or not node.open or opts.git_status_open or (node.dir and node.status)) and status or nil,
         last = true,
         type = node.type,
         severity = (not node.dir or not node.open or opts.diagnostics_open) and node.severity or nil,
@@ -316,7 +316,7 @@ function M.search(opts, ctx)
       if node then
         item.dir = node.dir
         item.type = node.type
-        item.status = (not node.dir or opts.git_status_open) and node.status or nil
+        item.status = (not node.dir or opts.git_status_open or (node.dir and node.status)) and node.status or nil
       end
 
       if opts.tree then
