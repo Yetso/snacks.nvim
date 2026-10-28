@@ -9,7 +9,93 @@ local uv = vim.uv or vim.loop
 
 local CACHE_TTL = 15 * 60 -- 15 minutes
 
+-- Marker printed before the status of each submodule (see `repo_status`)
+local SUBMODULE_MARKER = "\001"
+
 M.state = {} ---@type table<string, {tick: number, last: number}>
+
+---@param untracked? boolean
+local function status_args(untracked)
+  return { "status", "--porcelain=v1", "--ignored=matching", "-z", untracked and "-unormal" or "-uno" }
+end
+
+--- Runs git in `cwd` and calls `cb` with its stdout (empty when git can't be started).
+---@param cwd string
+---@param args string[]
+---@param cb fun(output: string)
+local function git(cwd, args, cb)
+  local output = ""
+  local stdout = assert(uv.new_pipe())
+  local handle ---@type uv.uv_process_t
+  handle = uv.spawn("git", {
+    stdio = { nil, stdout, nil },
+    cwd = cwd,
+    hide = true,
+    args = vim.list_extend({ "--no-pager", "--no-optional-locks" }, args),
+  }, function()
+    handle:close()
+  end)
+  if not handle then
+    stdout:close()
+    return cb("")
+  end
+  stdout:read_start(function(err, data)
+    assert(not err, err)
+    if data then
+      output = output .. data
+    else
+      stdout:close()
+      cb(output)
+    end
+  end)
+end
+
+--- Parses `git status --porcelain=v1 -z` output.
+--- Entries following a `SUBMODULE_MARKER .. path` entry belong to that submodule.
+---@param root string
+---@param output string
+---@param ret snacks.explorer.git.Status[]
+local function parse(root, output, ret)
+  local repo = root
+  for _, line in ipairs(vim.split(output, "\0")) do
+    local submodule = line:sub(1, 1) == SUBMODULE_MARKER and line:sub(2) or nil
+    if submodule then
+      repo = root .. "/" .. submodule
+    else
+      local status, file = line:match("^(..) (.+)$")
+      if status then
+        ret[#ret + 1] = { status = status, file = repo .. "/" .. file }
+      end
+    end
+  end
+end
+
+--- Git status of the repo at `root`, including its (nested) submodules.
+---@param root string
+---@param untracked? boolean
+---@param cb fun(ret: snacks.explorer.git.Status[])
+local function repo_status(root, untracked, cb)
+  local cmds = { status_args(untracked) }
+  if uv.fs_stat(root .. "/.gitmodules") then
+    -- `--quiet` hides the (localized) "Entering '<path>'" lines,
+    -- so print our own marker with the submodule path instead.
+    -- `\001` must match SUBMODULE_MARKER
+    local cmd = [[printf '\001%s\0' "$displaypath" && git --no-pager --no-optional-locks ]]
+      .. table.concat(status_args(untracked), " ")
+    cmds[#cmds + 1] = { "submodule", "--quiet", "foreach", "--recursive", cmd }
+  end
+  local ret = {} ---@type snacks.explorer.git.Status[]
+  local pending = #cmds
+  for _, args in ipairs(cmds) do
+    git(root, args, function(output)
+      parse(root, output, ret)
+      pending = pending - 1
+      if pending == 0 then
+        cb(ret)
+      end
+    end)
+  end
+end
 
 ---@param path string
 function M.refresh(path)
@@ -52,58 +138,12 @@ function M.update(cwd, opts)
   state.tick = state.tick + 1
   local tick = state.tick
 
-  local output = ""
-  local stdout = assert(uv.new_pipe())
-  local handle ---@type uv.uv_process_t
-  handle = uv.spawn("git", {
-    stdio = { nil, stdout, nil },
-    cwd = root,
-    hide = true,
-    args = {
-      "--no-pager",
-      "--no-optional-locks",
-      "status",
-      "--porcelain=v1",
-      "--ignored=matching",
-      "-z",
-      opts.untracked and "-unormal" or "-uno",
-    },
-  }, function()
-    handle:close()
-  end)
-
-  if not handle then
-    return M._update(cwd, {})
-  end
-
-  local function process()
+  repo_status(root, opts.untracked, function(ret)
     if not M.state[root] or M.state[root].tick ~= tick then
       return
     end
-    local ret = {} ---@type snacks.explorer.git.Status[]
-    for _, line in ipairs(vim.split(output, "\0")) do
-      if line ~= "" then
-        local status, file = line:match("^(..) (.+)$")
-        if status then
-          ret[#ret + 1] = {
-            status = status,
-            file = root .. "/" .. file,
-          }
-        end
-      end
-    end
-    if M._update(cwd, ret) and opts and opts.on_update then
+    if M._update(cwd, ret) and opts.on_update then
       vim.schedule(opts.on_update)
-    end
-  end
-
-  stdout:read_start(function(err, data)
-    assert(not err, err)
-    if data then
-      output = output .. data
-    else
-      process()
-      stdout:close()
     end
   end)
 end

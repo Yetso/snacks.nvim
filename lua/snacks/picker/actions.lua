@@ -365,6 +365,21 @@ function M.mark_delete(picker)
   picker:refresh()
 end
 
+--- Builds a git command that runs in the repository owning the item, so that
+--- files of submodules / nested repositories are handled by their own repo.
+--- For the submodule / nested repo folder itself, that's the parent repository.
+---@param item snacks.picker.Item
+---@param args (string|nil)[]
+---@return string[]
+local function git_cmd(item, args)
+  local path = Snacks.picker.util.path(item)
+  local root = path and Snacks.git.get_root(path)
+  if root and root == path then
+    root = Snacks.git.get_root(vim.fs.dirname(root))
+  end
+  return vim.list_extend(root and { "git", "-C", root } or { "git" }, args)
+end
+
 function M.git_stage(picker)
   local items = picker:selected({ fallback = true })
   local first = items[1]
@@ -379,9 +394,10 @@ function M.git_stage(picker)
     local cmd ---@type string[]
     if item.diff and item.staged ~= nil then
       opts.input = item.diff
-      cmd = { "git", "apply", "--cached", item.staged and "--reverse" or nil }
+      cmd = git_cmd(item, { "apply", "--cached", item.staged and "--reverse" or nil })
     elseif item.status then
-      cmd = item.status:sub(2) == " " and { "git", "restore", "--staged", item.file } or { "git", "add", item.file }
+      local path = Snacks.picker.util.path(item) --[[@as string]]
+      cmd = git_cmd(item, item.status:sub(2) == " " and { "restore", "--staged", path } or { "add", path })
     else
       Snacks.notify.error("Can't stage/unstage this change", { title = "Snacks Picker" })
       return
@@ -423,13 +439,9 @@ function M.git_restore(picker)
 
       if item.diff and item.staged ~= nil then
         opts.input = item.diff
-        if item.staged then
-          cmd = { "git", "apply", "--reverse", "--cached" }
-        else
-          cmd = { "git", "apply", "--reverse" }
-        end
+        cmd = git_cmd(item, { "apply", "--reverse", item.staged and "--cached" or nil })
       elseif item.status then
-        cmd = { "git", "restore", item.file }
+        cmd = git_cmd(item, { "restore", Snacks.picker.util.path(item) })
       else
         Snacks.notify.error("Can't restore this change", { title = "Snacks Picker" })
         return
