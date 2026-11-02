@@ -160,7 +160,13 @@ function M:update()
     line[#line + 1] = { ("(%d)"):format(selected), "SnacksPickerTotals" }
     line[#line + 1] = { " " }
   end
-  line[#line + 1] = { ("%d/%d"):format(self.picker.list:count(), #self.picker.finder.items), "SnacksPickerTotals" }
+  local number_results
+  if self.picker.list:count() == #self.picker.finder.items then
+    number_results = ("%d"):format(#self.picker.finder.items)
+  else
+    number_results = ("%d/%d"):format(self.picker.list:count(), #self.picker.finder.items)
+  end
+  line[#line + 1] = { number_results, "SnacksPickerTotals" }
   line[#line + 1] = { " " }
   local totals = table.concat(vim.tbl_map(function(v)
     return v[1]
