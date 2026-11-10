@@ -86,9 +86,8 @@ function M.watch()
   end
 
   for cwd in pairs(cwds) do
-    -- Watch git index
-    local root = Snacks.git.get_root(cwd)
-    if root then
+    -- Watch git index of the repo containing the cwd, or of the repos below it
+    for _, root in ipairs(Git.roots(cwd)) do
       used[root .. "/.git"] = true
       M.start(root .. "/.git", function(file)
         if vim.fs.basename(file) == "index" then

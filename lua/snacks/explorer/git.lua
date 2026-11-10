@@ -12,7 +12,16 @@ local CACHE_TTL = 15 * 60 -- 15 minutes
 -- Marker printed before the status of each submodule (see `repo_status`)
 local SUBMODULE_MARKER = "\001"
 
-M.state = {} ---@type table<string, {tick: number, last: number}>
+-- When the cwd is not inside a git repo, look this many levels deep for repos
+local MAX_DEPTH = 3
+
+---@class snacks.explorer.git.State
+---@field tick number
+---@field last number
+---@field repos string[] repositories whose status is shown
+
+--- Keyed by git root, or by the cwd when it's not inside a git repo
+M.state = {} ---@type table<string, snacks.explorer.git.State>
 
 ---@param untracked? boolean
 local function status_args(untracked)
@@ -97,6 +106,50 @@ local function repo_status(root, untracked, cb)
   end
 end
 
+--- Finds the git repositories below `dir`, without descending into them
+--- (their submodules are handled by `repo_status`). Skips hidden directories and `node_modules`.
+---@param dir string
+---@param depth? number
+---@param ret? string[]
+---@return string[]
+function M.find_repos(dir, depth, ret)
+  ret = ret or {}
+  depth = depth or 1
+  local fd = depth <= MAX_DEPTH and uv.fs_scandir(dir) or nil
+  while fd do
+    local name, t = uv.fs_scandir_next(fd)
+    if not name then
+      break
+    end
+    if t == "directory" and name:sub(1, 1) ~= "." and name ~= "node_modules" then
+      local path = dir .. "/" .. name
+      if uv.fs_stat(path .. "/.git") then
+        ret[#ret + 1] = path
+      else
+        M.find_repos(path, depth + 1, ret)
+      end
+    end
+  end
+  return ret
+end
+
+---@param cwd string
+local function state_key(cwd)
+  return Snacks.git.get_root(cwd) or svim.fs.normalize(cwd)
+end
+
+--- Git repositories whose status is shown for `cwd`
+---@param cwd string
+---@return string[]
+function M.roots(cwd)
+  local root = Snacks.git.get_root(cwd)
+  if root then
+    return { root }
+  end
+  local state = M.state[svim.fs.normalize(cwd)]
+  return state and state.repos or {}
+end
+
 ---@param path string
 function M.refresh(path)
   for root in pairs(M.state) do
@@ -108,11 +161,8 @@ end
 
 ---@param cwd string
 function M.is_dirty(cwd)
-  local root = Snacks.git.get_root(cwd)
-  if not root then
-    return false
-  end
-  return M.state[root] == nil or M.state[root].last == 0
+  local state = M.state[state_key(cwd)]
+  return state == nil or state.last == 0
 end
 
 ---@param cwd string
@@ -124,13 +174,10 @@ function M.update(cwd, opts)
     ttl = 0
   end
   local root = Snacks.git.get_root(cwd)
-
-  if not root then
-    return M._update(cwd, {})
-  end
+  local key = root or svim.fs.normalize(cwd)
   local now = os.time()
-  M.state[root] = M.state[root] or { tick = 0, last = 0 }
-  local state = M.state[root]
+  M.state[key] = M.state[key] or { tick = 0, last = 0, repos = {} }
+  local state = M.state[key]
   if now - state.last < ttl then
     return
   end
@@ -138,14 +185,29 @@ function M.update(cwd, opts)
   state.tick = state.tick + 1
   local tick = state.tick
 
-  repo_status(root, opts.untracked, function(ret)
-    if not M.state[root] or M.state[root].tick ~= tick then
-      return
+  -- not inside a git repo: show the status of all the repos below the cwd
+  state.repos = root and { root } or M.find_repos(key)
+  if #state.repos == 0 then
+    return M._update(cwd, {})
+  end
+
+  local ret = {} ---@type snacks.explorer.git.Status[]
+  local pending = #state.repos
+  for _, repo in ipairs(state.repos) do
+    if repo ~= root then
+      ret[#ret + 1] = { status = "!!", file = repo .. "/.git" }
     end
-    if M._update(cwd, ret) and opts.on_update then
-      vim.schedule(opts.on_update)
-    end
-  end)
+    repo_status(repo, opts.untracked, function(status)
+      vim.list_extend(ret, status)
+      pending = pending - 1
+      if pending > 0 or not M.state[key] or M.state[key].tick ~= tick then
+        return
+      end
+      if M._update(cwd, ret) and opts.on_update then
+        vim.schedule(opts.on_update)
+      end
+    end)
+  end
 end
 
 ---@param cwd string

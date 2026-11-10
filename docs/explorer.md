@@ -110,6 +110,8 @@ When `git_status = true` (default), files show git status indicators:
 
 - `]g` / `[g` → Jump to next/previous git change
 - Directories show aggregate status of contained files
+- Git submodules show the status of their own files
+- When the cwd is not inside a git repo, the status of the repos below it is shown (up to 3 levels deep)
 
 ### Diagnostics
 
