@@ -219,10 +219,10 @@ function M._update(cwd, results)
 
   local snapshot = Tree:snapshot(node, { "status", "ignored" })
 
-  Tree:walk(node, function(n)
+  Tree:each(node, function(n)
     n.status = nil
     n.ignored = nil
-  end, { all = true })
+  end)
 
   ---@param path string
   ---@param status string

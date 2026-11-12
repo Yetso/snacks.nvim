@@ -21,7 +21,7 @@
 ---@field exclude? string[] globs to exclude
 ---@field include? string[] globs to exclude
 
----@alias snacks.picker.explorer.Snapshot {fields: string[], state:table<snacks.picker.explorer.Node, any[]>}
+---@alias snacks.picker.explorer.Snapshot {fields: string[], state:table<snacks.picker.explorer.Node, any[]>, count: number}
 
 local uv = vim.uv or vim.loop
 
@@ -338,24 +338,40 @@ function Tree:next(cwd, filter, opts)
   return next or first
 end
 
+--- Calls `fn` for `node` and all its descendants, in no particular order.
+--- Cheaper than `walk` when order doesn't matter.
+---@param node snacks.picker.explorer.Node
+---@param fn fun(node: snacks.picker.explorer.Node)
+function Tree:each(node, fn)
+  fn(node)
+  for _, child in pairs(node.children) do
+    self:each(child, fn)
+  end
+end
+
 ---@param node snacks.picker.explorer.Node
 ---@param snapshot snacks.picker.explorer.Snapshot
 function Tree:changed(node, snapshot)
-  local old = snapshot.state
-  local current = self:snapshot(node, snapshot.fields).state
-  if vim.tbl_count(current) ~= vim.tbl_count(old) then
-    return true
-  end
-  for n, data in pairs(current) do
+  local old, fields = snapshot.state, snapshot.fields
+  local count, changed = 0, false
+  self:each(node, function(n)
+    if changed then
+      return
+    end
+    count = count + 1
     local prev = old[n]
     if not prev then
-      return true
+      changed = true
+      return
     end
-    if not vim.deep_equal(prev, data) then
-      return true
+    for f, field in ipairs(fields) do
+      if prev[f] ~= n[field] then
+        changed = true
+        return
+      end
     end
-  end
-  return false
+  end)
+  return changed or count ~= snapshot.count
 end
 
 ---@param node snacks.picker.explorer.Node
@@ -365,14 +381,16 @@ function Tree:snapshot(node, fields)
   local ret = {
     state = {},
     fields = fields,
+    count = 0,
   }
-  Tree:walk(node, function(n)
+  self:each(node, function(n)
     local data = {} ---@type any[]
     for f, field in ipairs(fields) do
       data[f] = n[field]
     end
     ret.state[n] = data
-  end, { all = true })
+    ret.count = ret.count + 1
+  end)
   return ret
 end
 
