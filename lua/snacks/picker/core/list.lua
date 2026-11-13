@@ -467,6 +467,9 @@ end
 -- PERF: cache each row's formatted output; on scroll only the new row is rebuilt.
 -- Invalidated by the matcher ticks (search), forced updates (self._fmt_gen),
 -- self._width (resize) and the selection state.
+-- NOTE: the cache lives on the item. Sources that change an item in place (instead of
+-- returning new items from `find()`) must call `list:update({ force = true })`,
+-- otherwise the row keeps its old text.
 ---@param item snacks.picker.Item
 function M:format(item)
   local sc = #self.selected > 0 or self.picker.opts.formatters.selected.show_always

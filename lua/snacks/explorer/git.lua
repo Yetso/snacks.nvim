@@ -19,6 +19,8 @@ local MAX_DEPTH = 3
 ---@field tick number
 ---@field last number
 ---@field repos string[] repositories whose status is shown
+---@field scanned? boolean `repos` was filled by `find_repos` (cwd not inside a repo)
+---@field rescan? boolean a refresh happened outside the known repos, so repos may have been added/removed
 
 --- Keyed by git root, or by the cwd when it's not inside a git repo
 M.state = {} ---@type table<string, snacks.explorer.git.State>
@@ -121,8 +123,10 @@ function M.find_repos(dir, depth, ret)
     if not name then
       break
     end
+    local path = dir .. "/" .. name
+    -- some filesystems don't report the type
+    t = t or Snacks.util.path_type(path)
     if t == "directory" and name:sub(1, 1) ~= "." and name ~= "node_modules" then
-      local path = dir .. "/" .. name
       if uv.fs_stat(path .. "/.git") then
         ret[#ret + 1] = path
       else
@@ -152,11 +156,27 @@ end
 
 ---@param path string
 function M.refresh(path)
-  for root in pairs(M.state) do
-    if path == root or path:find(root .. "/", 1, true) == 1 then
-      M.state[root].last = 0
+  for key, state in pairs(M.state) do
+    if path == key or path:find(key .. "/", 1, true) == 1 then
+      state.last = 0
+      if state.scanned and not M.in_repos(path, state.repos) then
+        -- e.g. a repo was cloned or deleted below the cwd
+        state.rescan = true
+      end
     end
   end
+end
+
+--- Whether `path` is one of `repos` or inside one of them
+---@param path string
+---@param repos string[]
+function M.in_repos(path, repos)
+  for _, repo in ipairs(repos) do
+    if path == repo or path:find(repo .. "/", 1, true) == 1 then
+      return true
+    end
+  end
+  return false
 end
 
 ---@param cwd string
@@ -185,8 +205,15 @@ function M.update(cwd, opts)
   state.tick = state.tick + 1
   local tick = state.tick
 
-  -- not inside a git repo: show the status of all the repos below the cwd
-  state.repos = root and { root } or M.find_repos(key)
+  if root then
+    state.repos = { root }
+  elseif not state.scanned or state.rescan then
+    -- not inside a git repo: show the status of all the repos below the cwd.
+    -- Scanning is synchronous, so only redo it when the repos may have changed
+    -- (see `M.refresh`), not on every git refresh.
+    state.repos = M.find_repos(key)
+    state.scanned, state.rescan = true, false
+  end
   if #state.repos == 0 then
     return M._update(cwd, {})
   end
